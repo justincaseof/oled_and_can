@@ -7,6 +7,7 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <mcp_can.h>
 
 // === OLED ===
 #define OLED_RESET LED_BUILTIN  // = D4 = Pin2
@@ -17,11 +18,16 @@ Adafruit_SSD1306 display(OLED_RESET);
 #endif
 // === /OLED ===
 
+// === MCP2515 ===
+MCP_CAN CAN(D3);    // Set CS to pin15 (=D8)
+// === /MCP2515 ===
+
+// === Networking / WIFI ===
 const char* ssid = "Turminator";
 const char* password = "lkwpeter,.-123";
 MDNSResponder mdns;
-
 ESP8266WebServer server(80);
+// === /Networking / WIF ===
 
 // static const uint8_t D0   = 16;
 // static const uint8_t D1   = 5;
@@ -119,21 +125,91 @@ void startHTTPD() {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-void setup(void){
-  setupDIO();
-  setupSerial();
-  setupWifi();
-  setupOLED();
-  waitForWifi();
+void initCAN() {
+    Serial.print("Initializing CAN ...");
 
-  display.println("IP: ");
-  display.println(WiFi.localIP());
-  display.display();
+    // CAN Bus on BMW K51 has 500kbps
+    while(CAN_OK != CAN.begin(CAN_500KBPS)) {
+        Serial.print(".");
+        delay(100);
+    }
 
-  setupMDNS();
-  startHTTPD();
+    // Mode
+    //CAN.mcp2515_modifyRegister(MCP_CANCTRL,MODE_MASK,MODE_LOOPBACK); // MODE_NORMAL MODE_LOOPBACK
+
+    //Set filter masks
+    CAN.init_Mask(0, 0, 0xfff);
+    CAN.init_Mask(1, 0, 0xfff);
+
+    // Set filters
+    CAN.init_Filt(0, 0, 0x2D0); // ZFE
+    CAN.init_Filt(0, 0, 0x2A0);
+
+    // Print in CSV format
+    Serial.println("time,CAN-ID,b0,b1,b2,b3,b4,b5,b6,b7");
+    Serial.println();
+
+    Serial.println("CAN initialized.");
 }
 
-void loop(void){
-  server.handleClient();
+void printCAN() {
+    unsigned char length = 0;
+    unsigned char data[8];
+
+    // Print in CSV format
+    if(CAN_MSGAVAIL == CAN.checkReceive()){
+        CAN.readMsgBuf(&length, data);
+        Serial.print(millis());
+        Serial.print(",");
+        Serial.print(CAN.getCanId(), HEX);
+        for(int i = 0; i<length; i++) {
+            Serial.print(",");
+            if( data[i] < 0x10) {
+                Serial.print("0");
+            }
+            Serial.print(data[i], HEX);
+        }
+        Serial.println("");
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+void setup(void) {
+    setupDIO();
+    setupSerial();
+    setupWifi();
+    setupOLED();
+
+    display.println("initCAN...");
+    display.display();
+    initCAN();
+    display.println("DONE!");
+    display.display();
+
+    waitForWifi();
+    // display.println("IP: ");
+    // display.println(WiFi.localIP());
+    // display.display();
+
+    setupMDNS();
+    startHTTPD();
+}
+
+unsigned long attempt = 0;
+void loop(void) {
+    // HTTP
+    server.handleClient();
+
+    attempt = attempt + 1;
+    if (attempt % 32 == 0) {
+        display.clearDisplay();
+        display.setCursor(0, 0);
+        display.print("run #");
+        display.println(attempt);
+        display.display();
+    }
+
+    // CAN
+    printCAN();
 }
